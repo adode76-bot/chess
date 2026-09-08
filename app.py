@@ -1,110 +1,134 @@
 import streamlit as st
 import chess
-import chess.svg
-import base64
 
-st.set_page_config(page_title="스트림릿 체스 게임", page_icon="♟️")
+st.set_page_config(page_title="터치 체스 게임", page_icon="♟️", layout="centered")
 
-st.title("♟️ Streamlit 체스 게임")
+st.title("♟️ 터치/클릭 체스 게임")
 
-# 세션 상태 초기화 (게임 보드 및 기물 선택)
+# 1. 유니코드 체스 기물 심볼 매핑
+PIECE_UNICODE = {
+    'R': '♖', 'N': '♘', 'B': '♗', 'Q': '♕', 'K': '♔', 'P': '♙', # 백
+    'r': '♜', 'n': '♞', 'b': '♝', 'q': '♛', 'k': '♚', 'p': '♟', # 흑
+    None: ' '
+}
+
+# 2. 세션 상태 초기화
 if "board" not in st.session_state:
     st.session_state.board = chess.Board()
-if "selected_square" not in st.session_state:
-    st.session_state.selected_square = None
+if "selected_sq" not in st.session_state:
+    st.session_state.selected_sq = None
 
 board = st.session_state.board
 
-# SVG 체스판을 HTML 이미지를 만드는 함수
-def render_board(board, selected_square=None):
-    # 가능한 이동 경로 하이라이트
-    fill = {}
-    if selected_square is not None:
-        fill[selected_square] = "#7B68EE" # 선택한 기물 (보라색)
-        for move in board.legal_moves:
-            if move.from_square == selected_square:
-                fill[move.to_square] = "#90EE90" # 이동 가능한 칸 (연두색)
+# 클릭 이벤트 처리 함수
+def handle_square_click(sq_index):
+    # 이미 선택된 칸이 있는 경우 -> 두 번째 클릭 (이동 시도)
+    if st.session_state.selected_sq is not None:
+        from_sq = st.session_state.selected_sq
+        to_sq = sq_index
+        
+        # 동일한 칸을 다시 누르면 선택 취소
+        if from_sq == to_sq:
+            st.session_state.selected_sq = None
+            return
 
-    board_svg = chess.svg.board(
-        board=board,
-        fill=fill,
-        size=400,
-        lastmove=board.peek() if board.move_stack else None
-    )
-    b64 = base64.b64encode(board_svg.encode('utf-8')).decode('utf-8')
-    return f'<img src="data:image/svg+xml;base64,{b64}" width="100%"/>'
+        # 승급(폰이 끝까지 간 경우) 기본값을 퀸(Queen)으로 처리
+        move = chess.Move(from_sq, to_sq, promotion=chess.QUEEN)
+        
+        # 법적으로 가능한 수인지 확인
+        if move in board.legal_moves:
+            board.push(move)
+            st.session_state.selected_sq = None
+        else:
+            # 합법적인 이동이 아니고, 클릭한 곳에 본인 기물이 있다면 선택 칸 변경
+            piece = board.piece_at(to_sq)
+            if piece and piece.color == board.turn:
+                st.session_state.selected_sq = to_sq
+            else:
+                st.session_state.selected_sq = None
+    # 선택된 칸이 없는 경우 -> 첫 번째 클릭 (기물 선택)
+    else:
+        piece = board.piece_at(sq_index)
+        # 자기 턴의 기물만 선택 가능
+        if piece and piece.color == board.turn:
+            st.session_state.selected_sq = sq_index
 
-# 상단 게임 상태 출력
+# CSS 스타일 적용 (체스판 보더 및 버튼 크기 제어)
+st.markdown("""
+    <style>
+    /* 버튼 폰트 크기 및 높이 설정 */
+    div[data-testid="stColumn"] button {
+        height: 60px !important;
+        font-size: 30px !important;
+        line-height: 1 !important;
+        padding: 0px !important;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
+# 3. 게임 상태 표시
 if board.is_checkmate():
-    st.error("체크메이트! 게임이 종료되었습니다.")
+    st.error("🏆 체크메이트! 게임이 종료되었습니다.")
 elif board.is_stalemate():
-    st.warning("스테일메이트! 비겼습니다.")
+    st.warning("🤝 스테일메이트! 비겼습니다.")
 elif board.is_check():
-    st.warning(f"체크! ({'백' if board.turn == chess.WHITE else '흑'} 차례)")
+    st.warning(f"⚠️ 체크! ({'백(White)' if board.turn == chess.WHITE else '흑(Black)'} 차례)")
 else:
     st.info(f"현재 턴: **{'백(White)' if board.turn == chess.WHITE else '흑(Black)'}**")
 
-col1, col2 = st.columns([1, 1])
+# 선택된 기물 및 안내문 표시
+if st.session_state.selected_sq is not None:
+    sq_name = chess.square_name(st.session_state.selected_sq)
+    st.caption(f"선택한 기물 위치: **{sq_name.upper()}** (이동할 위치를 클릭하세요)")
+else:
+    st.caption("움직일 기물을 클릭/터치하세요.")
 
-with col1:
-    # 체스판 시각화
-    st.markdown(render_board(board, st.session_state.selected_square), unsafe_allow_html=True)
-    
-    if st.button("🔄 게임 리셋", use_container_width=True):
+# 4. 체스판 UI 렌더링 (8x8 Grid)
+# 체스판은 8행(rank 8~1) x 8열(file a~h)로 구성됨
+legal_destinations = []
+if st.session_state.selected_sq is not None:
+    legal_destinations = [m.to_square for m in board.legal_moves if m.from_square == st.session_state.selected_sq]
+
+for rank in range(7, -1, -1):
+    cols = st.columns(8)
+    for file in range(8):
+        sq = chess.square(file, rank)
+        piece = board.piece_at(sq)
+        piece_symbol = PIECE_UNICODE[piece.symbol()] if piece else " "
+        
+        # 버튼 라벨 및 스타일링
+        # 선택된 칸 -> 🟪 (보라)
+        # 이동 가능한 칸 -> 🟩 (연두)
+        # 기본 체스판 -> ⬜ / ⬛
+        is_selected = (sq == st.session_state.selected_sq)
+        is_highlighted = sq in legal_destinations
+        
+        if is_selected:
+            label = f"🟪 {piece_symbol}" if piece_symbol != " " else "🟪"
+        elif is_highlighted:
+            label = f"🟩 {piece_symbol}" if piece_symbol != " " else "🟩"
+        else:
+            label = piece_symbol
+
+        with cols[file]:
+            st.button(
+                label,
+                key=f"sq_{sq}",
+                on_click=handle_square_click,
+                args=(sq,),
+                use_container_width=True
+            )
+
+# 5. 리셋 및 기보 기록
+st.divider()
+col_btn, col_exp = st.columns([1, 2])
+
+with col_btn:
+    if st.button("🔄 게임 리셋", type="secondary", use_container_width=True):
         st.session_state.board = chess.Board()
-        st.session_state.selected_square = None
+        st.session_state.selected_sq = None
         st.rerun()
 
-with col2:
-    st.subheader("🎮 수 두기")
-    
-    # 1. 기물 선택 방식 (클릭 대용 셀렉트 박스)
-    legal_moves = list(board.legal_moves)
-    
-    if not board.is_game_over():
-        # 이동 가능한 출발 지점 목록
-        from_squares = sorted(list(set(m.from_square for m in legal_moves)))
-        from_options = {chess.square_name(sq): sq for sq in from_squares}
-        
-        selected_from_name = st.selectbox(
-            "1. 움직일 기물 위치 선택",
-            options=["선택하세요"] + list(from_options.keys())
-        )
-        
-        if selected_from_name != "선택하세요":
-            from_sq = from_options[selected_from_name]
-            st.session_state.selected_square = from_sq
-            
-            # 선택한 기물이 갈 수 있는 도착 지점 목록
-            to_squares = [m.to_square for m in legal_moves if m.from_square == from_sq]
-            to_options = {chess.square_name(sq): sq for sq in to_squares}
-            
-            selected_to_name = st.selectbox(
-                "2. 도달할 위치 선택",
-                options=["선택하세요"] + list(to_options.keys())
-            )
-            
-            # 승급(Promotion) 처리
-            promotion = None
-            if any(m.promotion for m in legal_moves if m.from_square == from_sq):
-                promo_piece = st.selectbox("승급 기물 선택", ["퀸(Q)", "룩(R)", "비숍(B)", "나이트(N)"])
-                promo_map = {"퀸(Q)": chess.QUEEN, "룩(R)": chess.ROOK, "비숍(B)": chess.BISHOP, "나이트(N)": chess.KNIGHT}
-                promotion = promo_map[promo_piece]
-
-            if st.button("착수하기", type="primary", use_container_width=True):
-                if selected_to_name != "선택하세요":
-                    to_sq = to_options[selected_to_name]
-                    move = chess.Move(from_sq, to_sq, promotion=promotion)
-                    
-                    if move in board.legal_moves:
-                        board.push(move)
-                        st.session_state.selected_square = None
-                        st.rerun()
-                    else:
-                        st.error("유효하지 않은 이동입니다.")
-        else:
-            st.session_state.selected_square = None
-
-    # 기보 기록
+with col_exp:
     with st.expander("📜 기보 기록 (SAN)"):
         st.write(board.to_san(board.move_stack) if board.move_stack else "기록 없음")
